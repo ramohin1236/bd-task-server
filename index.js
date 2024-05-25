@@ -8,29 +8,18 @@ const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 
 
 
-app.use(cors())
+app.use(cors({
+    origin: 'https://bd-calling-e2093.web.app', 
+    methods: ['GET', 'POST', 'PUT', 'DELETE'], 
+    allowedHeaders: ['Content-Type', 'Authorization'] 
+}));
 app.use(express.json())
 
 
 // jwt 
 
-function verifyJWT(req, res, next) {
-    const authHeader = req.headers.authorization
-  
-    if (!authHeader) {
-      return res.status(401).send({ message: 'unauthorized access' })
-    }
-    const token = authHeader.split(' ')[1]
-  
-    jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, function (err, decoded) {
-      if (err) {
-        return res.status(403).send({ message: 'Forbidden access' })
-      }
-      console.log(decoded)
-      req.decoded = decoded
-      next()
-    })
-  }
+
+ 
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASSWORD}@cluster0.vjcdyry.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
@@ -46,22 +35,55 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
 
+    app.post('/jwt', async(req,res)=>{
+        const user= req.body;
+        const token= jwt.sign(user, process.env.ACCESS_TOKEN_SECRET,
+            {expiresIn: '1h'} );
+            res.send({token})
+    })
+
+
+
+    const verifyToken =(req,res,next)=>{
+        // console.log("inside verify token", req.headers.authorization)
+        if(!req.headers.authorization){
+            return res.status(401).send({message: 'Unathorized access'})
+        }
+        const token= req.headers.authorization.split(' ')[1]
+        jwt.verify(token, process.env.ACCESS_TOKEN_SECTEAT, (err,decoded)=>{
+           if(err){
+           return res.status(401).send({message: 'Unathorized access'})
+           }
+           req.decoded = decoded;
+           next()        
+        })
+        // next()
+      }
+
+
     const userCollection =client.db('bd-calling-task').collection('User')
     const productCollection =client.db('bd-calling-task').collection('Product')
     const commentsCollection =client.db('bd-calling-task').collection('Comments')
 
   // Save user email & generate JWT
-  app.post('/users', async(req,res)=>{
-    const user = req.body;
+  app.post('/users', async (req, res) => {
+    try {
+        const user = req.body;
+        const query = { email: user.email };
+        const existingUser = await userCollection.findOne(query);
 
-    const query = {email: user.email}
-    const existingUser = await userCollection.findOne(query);
-    if(existingUser){
-        return res.send({message: "user already exists", insertedId:null})
+        if (existingUser) {
+            return res.status(200).send({ message: 'User already exists', insertedId: null });
+        }
+
+        const result = await userCollection.insertOne(user);
+        const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h' });
+        res.status(201).send({ ...result, token });
+    } catch (error) {
+        console.error('Error registering user:', error);
+        res.status(500).send({ error: 'Failed to register user' });
     }
-    const result = await userCollection.insertOne(user)
-    res.send(result)
-  })
+});
 
 
 // add product
@@ -138,52 +160,6 @@ app.post('/product/:productId', async (req, res) => {
 });
 
 
-// Get comments for a product by productId
-// app.get('/products/:productId', async (req, res) => {
-//     try {
-//         const productId = req.params.productId;
-
-//         // Ensure that productId is a valid ObjectId
-//         if (!ObjectId.isValid(productId)) {
-//             return res.status(400).send({ error: 'Invalid product ID' });
-//         }
-
-//         // Query the comments collection for comments with the given productId
-//         const comments = await commentsCollection.find({ productId:productId }).toArray();
-
-//         res.status(200).send(comments);
-//     } catch (error) {
-//         console.error('Error fetching comments:', error);
-//         res.status(500).send({ error: 'Failed to fetch comments' });
-//     }
-// });
-
-// calculate review single product
-// app.get('/product/:productId/comments', async (req, res) => {
-//     try {
-//         const productId = req.params.productId;
-
-//         // Ensure that productId is a valid ObjectId
-//         if (!ObjectId.isValid(productId)) {
-//             return res.status(400).send({ error: 'Invalid product ID' });
-//         }
-
-//         // Find comments for the product and calculate the average rating
-//         const comments = await commentsCollection.find({ productId: new ObjectId(productId) }).toArray();
-
-//         // Calculate the average rating
-//         const ratings = comments.map(comment => comment.ratings);
-//         const averageRating = ratings.reduce((acc, rating) => acc + rating, 0) / ratings.length || 0;
-
-//         res.status(200).send({
-//             comments: comments,
-//             averageRating: averageRating.toFixed(2) // Format to 2 decimal places
-//         });
-//     } catch (error) {
-//         console.error('Error fetching comments or calculating average rating:', error);
-//         res.status(500).send({ error: 'Failed to fetch comments or calculate average rating' });
-//     }
-// });
 
 
 
@@ -191,30 +167,28 @@ app.get('/products/:productId', async (req, res) => {
     try {
         const productId = req.params.productId;
 
-        // Ensure that productId is a valid ObjectId
+        
         if (!ObjectId.isValid(productId)) {
             return res.status(400).send({ error: 'Invalid product ID' });
         }
 
-        // Query the comments collection for comments with the given productId
+     
         const comments = await commentsCollection.find({ productId: productId}).toArray();
 
-        // Calculate the average rating
+      
         const ratings = comments.map(comment => comment.ratings);
         let averageRating = 0;
         if (ratings.length > 0) {
             const sumOfRatings = ratings.reduce((acc, rating) => acc + rating, 0);
             const averageRatingPercentage = (sumOfRatings / ratings.length);
-            averageRating = (averageRatingPercentage / 100) * 5; // Normalize to 0-5 scale
+            averageRating = (averageRatingPercentage / 100) * 5; 
         }
 
-        // Ensure average rating does not exceed 5 and round to nearest integer
         averageRating = Math.min(Math.round(averageRating), 5);
 
-        // Send the comments and the average rating
         res.status(200).send({
             comments: comments,
-            averageRating: averageRating // Send as integer
+            averageRating: averageRating 
         });
     } catch (error) {
         console.error('Error fetching comments:', error);
